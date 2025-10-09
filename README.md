@@ -15,9 +15,10 @@ It's a stop-gap until inter-app networking is properly implemented.
 
 Dragonify listens to Docker events to automatically manage networks and container connections:
 
-- **Automatic Network Management**: It can create, manage, and delete Docker bridge networks. Networks created by Dragonify are labeled for easy identification and can be automatically removed when they are no longer in use.
-- **DNS Aliasing**: When a container is connected to a network, Dragonify assigns it a DNS alias in the format `{service}.{project}.svc.cluster.local`, allowing other containers on the same network to resolve its address by name.
-- **Flexible Configuration**: You can use environment variables and container labels to customize how Dragonify behaves, from creating multiple isolated networks to controlling which containers get connected.
+- It create, manage, and delete Docker bridge networks. Networks created by Dragonify are labeled for automatic removal when they are no longer in use.
+- When a container is connected to a network, Dragonify assigns it a DNS alias in the format `{service}.{project}.svc.cluster.local`, allowing other containers on the same network to resolve its address by name.
+- You can use environment variables and container labels to customize how Dragonify behaves, from creating multiple isolated networks to controlling which containers get connected.
+- Only works on apps managed by TrueNAS Scale/CE UI, by checking for if the project/stack name in `com.docker.compose.project` property starts with `ix-`.
 
 ### Configuration
 
@@ -53,9 +54,4 @@ To connect an application container to one or more specific networks, you use a 
   labels:
     - "tj.horner.dragonify.networks=media-net,downloads"
 ```
-
-### Secure Installation with Docker Socket Proxy
-
-For a more secure setup, it is highly recommended to use a socket proxy instead of giving Dragonify direct access to the Docker daemon. This approach limits Dragonify to only the permissions it absolutely needs, following the principle of least privilege.
-
-The example `docker-compose.yml` uses `wollomatic/socket-proxy`, which offers granular read/write control via regex path filtering.
+![label example](label-example.png)
