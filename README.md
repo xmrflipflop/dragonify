@@ -28,18 +28,13 @@ You can control Dragonify's behavior using a combination of environment variable
 
 These variables are set on the `dragonify` container itself.
 
-- `LOG_LEVEL`
-    - **Description**: Sets the verbosity of the application's logs.
-    - **Values**: `info` (default), `debug`.
-    - **Example**: `LOG_LEVEL: debug`
-- `CONNECT_ALL`
-    - **Description**: Controls whether all TrueNAS-managed `ix-` apps should be automatically connected to the default `apps-internal` network. By default, this is enabled to maintain backward compatibility.
-    - **Values**: `true` (default), `false`.
-    - **Example**: `CONNECT_ALL: "false"`
-- `CUSTOMS_NETWORKS`
-    - **Description**: A comma-separated list of Docker networks that Dragonify should create on startup. This is useful for pre-defining networks you plan to use across multiple applications.
-    - **Values**: A string of network names, e.g., `media-net,home-automation-net`.
-    - **Example**: `CUSTOMS_NETWORKS: apps-internal-custom,app-external`
+Here's the environment variables section as a table:
+
+| Variable | Description | Values | Example |
+|----------|-------------|--------|---------|
+| `LOG_LEVEL` | Sets the verbosity of the application's logs. | `info` (default), `debug` | `LOG_LEVEL: debug` |
+| `CONNECT_ALL` | Controls whether all TrueNAS-managed `ix-` apps should be automatically connected to the default `apps-internal` network. | `true` (default), `false` | `CONNECT_ALL: "false"` |
+| `CUSTOMS_NETWORKS` | A comma-separated list of Docker networks that Dragonify should create on startup. This is useful for pre-defining networks you plan to use across multiple applications. | e.g. `media-net,home-automation-net` | `CUSTOMS_NETWORKS: apps-internal-custom,app-external` |
 
 #### Container Label
 
