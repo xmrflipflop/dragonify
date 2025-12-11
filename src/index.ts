@@ -138,7 +138,7 @@ function isContainerInNetwork(container: Docker.ContainerInfo, network_name: str
 }
 
 function isIxProjectName(name: string) {
-  return name.startsWith("ix-")
+  return name?.startsWith("ix-") ?? false
 }
 
 function isIxAppContainer(container: Docker.ContainerInfo) {
