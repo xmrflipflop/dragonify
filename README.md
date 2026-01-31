@@ -1,7 +1,7 @@
 
 > [!Note]
 > 
-> This is an updated README for [casse-boubou/dragonify](https://github.com/casse-boubou/dragonify), a fork of the original [tjhorner/dragonify](https://github.com/tjhorner/dragonify)
+> A huge thank you to [EngTurtle](https://github.com/EngTurtle) and [Sophist-UK](https://github.com/Sophist-UK) for their contributions.
 
 Dragonify is a utility for TrueNAS SCALE that enhances inter-app communication by automatically managing Docker networks. It allows containers to communicate with each other via DNS, restoring and extending the networking functionality available in previous TrueNAS versions. This updated version provides granular control over network creation and container connections, improving both flexibility and security.
 
