@@ -13,4 +13,5 @@ FROM gcr.io/distroless/nodejs24-debian13
 COPY --from=build /app/dist/index.js /app/index.js
 COPY --from=prod-deps /app/node_modules /app/node_modules
 WORKDIR /app
+STOPSIGNAL SIGTERM
 CMD ["index.js"]

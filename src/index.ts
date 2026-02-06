@@ -597,4 +597,13 @@ async function main() {
   })
 }
 
+// Handle Docker shutdown to obtain an exit code: 0
+function shutdown(signal) {
+  console.log(`Received ${signal}, shutting down`);
+  process.exit(0);
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+
 main()
