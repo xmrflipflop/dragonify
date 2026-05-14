@@ -14,9 +14,14 @@ import PQueue from "p-queue"
 
 const DRAGONIFY_NETWORK_LABEL = "tj.horner.dragonify.networks"
 const DRAGONIFY_NETWORK_NAME: string = process.env.CUSTOMS_NETWORK_NAME?.toLowerCase() ?? "apps-internal"
+// All networks created via CUSTOMS_NETWORKS are forced to use this prefix so
+// Dragonify can identify, manage, and clean up the networks it owns without
+// touching unrelated networks on the host.
+const DRAGONIFY_NETWORK_PREFIX = "dragonify-"
 const IX_DOCKER_LABEL = "com.docker.compose.project"
 const ENV_CONNECT_ALL: string | undefined = process.env.CONNECT_ALL
 const LOG_LEVEL: string | undefined = process.env.LOG_LEVEL?.toLowerCase() ?? "info"
+const ENV_CUSTOMS_NETWORKS: string | undefined = process.env.CUSTOMS_NETWORKS
 
 let CONNECT_ALL: boolean = true
 if (ENV_CONNECT_ALL !== undefined && ENV_CONNECT_ALL == "false") {
@@ -28,6 +33,21 @@ if (LOG_LEVEL !== undefined && LOG_LEVEL == "debug") {
   DEBUG = true
 }
 
+// Parse comma-separated list of custom networks to pre-create on startup.
+// These networks are useful for pre-defining networks you plan to use across
+// multiple applications via the `tj.horner.dragonify.networks` label.
+// Entries are trimmed, lowercased, de-duplicated, and force-prefixed with
+// `dragonify-` so Dragonify can clearly identify and manage what it owns.
+// Empty entries are ignored.
+const CUSTOMS_NETWORKS: string[] = ENV_CUSTOMS_NETWORKS
+  ? Array.from(new Set(
+      ENV_CUSTOMS_NETWORKS.split(',')
+        .map(n => n.trim().toLowerCase())
+        .filter(n => n.length > 0)
+        .map(n => n.startsWith(DRAGONIFY_NETWORK_PREFIX) ? n : `${DRAGONIFY_NETWORK_PREFIX}${n}`)
+    ))
+  : []
+
 logger.info(`Dragonify starting...`)
 logger.info(`LOG_LEVEL: ${LOG_LEVEL}`)
 logger.info(`CONNECT_ALL: ${CONNECT_ALL}`)
@@ -35,6 +55,9 @@ if (CONNECT_ALL) {
   logger.info(`DRAGONIFY_NETWORK_NAME: "${DRAGONIFY_NETWORK_NAME}"`)
 }
 logger.info(`DRAGONIFY_NETWORK_LABEL: "${DRAGONIFY_NETWORK_LABEL}"`)
+if (CUSTOMS_NETWORKS.length > 0) {
+  logger.info(`CUSTOMS_NETWORKS: [${CUSTOMS_NETWORKS.join(', ')}]`)
+}
 
 // We hold the Docker object instance globally to avoid having to pass it on every function call
 const DOCKER: Docker = new Docker()
@@ -514,6 +537,105 @@ async function setUpDragonifyNetwork() {
   }
 }
 
+// Pre-create any networks listed in the CUSTOMS_NETWORKS env var.
+// These networks are created as internal bridge networks (no external network
+// access) to match the default `apps-internal` network's isolation model. They
+// are tagged with DRAGONIFY_NETWORK_LABEL and named with the `dragonify-`
+// prefix so they can be unambiguously identified as Dragonify-managed and
+// cleaned up by `cleanupStaleDragonifyNetworks()` / `removeEmptyNetwork()`.
+// Containers are NOT auto-connected to these networks; connection is driven by
+// the per-container `tj.horner.dragonify.networks` label, same as any other
+// Dragonify-managed network.
+async function setUpCustomNetworks() {
+  if (CUSTOMS_NETWORKS.length === 0) {
+    return
+  }
+
+  logger.info(`Setting up custom networks defined by CUSTOMS_NETWORKS: [${CUSTOMS_NETWORKS.join(', ')}]`)
+
+  for (const networkName of CUSTOMS_NETWORKS) {
+    // Skip if this matches the default Dragonify network — already handled by setUpDragonifyNetwork()
+    if (networkName === DRAGONIFY_NETWORK_NAME) {
+      logger.debug(`Custom network "${networkName}" matches DRAGONIFY_NETWORK_NAME, skipping (already handled by setUpDragonifyNetwork)`)
+      continue
+    }
+
+    const existing = await filterNetworkByName(networkName)
+
+    // Check if the network already exists (created previously or by another tool)
+    if (existing.find(n => n.Name === networkName)) {
+      logger.debug(`Custom network "${networkName}" already exists`)
+      continue
+    }
+
+    // Create the custom network with the Dragonify label so it can be
+    // identified and cleaned up via pruneNetworks when no longer in use.
+    try {
+      await DOCKER.createNetwork({
+        Name: networkName,
+        Driver: "bridge",
+        Internal: true,
+        Labels: {
+          [DRAGONIFY_NETWORK_LABEL]: "true"
+        },
+      })
+      logger.info(`Custom network "${networkName}" created`)
+    } catch (e: any) {
+      if (e.statusCode === 409) {
+        logger.debug(`Custom network "${networkName}" already exists (race condition)`)
+        continue
+      }
+      logger.error(`Failed to create custom network "${networkName}":`, e)
+    }
+  }
+}
+
+// Remove any `dragonify-` prefixed networks on the host that are NOT in the
+// current CUSTOMS_NETWORKS list. This handles the case where a user removes
+// an entry from CUSTOMS_NETWORKS — without this, the network would linger
+// forever because it carries no compose project and is never auto-pruned by
+// the normal app lifecycle.
+//
+// Safety:
+//  - Only touches networks whose names start with the `dragonify-` prefix.
+//  - Never touches the default DRAGONIFY_NETWORK_NAME (`apps-internal`).
+//  - Skips removal if the network still has containers connected; logs a
+//    warning so the operator notices and can intervene.
+async function cleanupStaleDragonifyNetworks() {
+  const allNetworks = await DOCKER.listNetworks()
+  const managed = new Set(CUSTOMS_NETWORKS)
+
+  const staleCandidates = allNetworks.filter(n =>
+    n.Name.startsWith(DRAGONIFY_NETWORK_PREFIX) &&
+    n.Name !== DRAGONIFY_NETWORK_NAME &&
+    !managed.has(n.Name)
+  )
+
+  if (staleCandidates.length === 0) {
+    logger.debug(`No stale "${DRAGONIFY_NETWORK_PREFIX}*" networks found`)
+    return
+  }
+
+  logger.info(`Found ${staleCandidates.length} stale dragonify-prefixed network(s) to evaluate for cleanup`)
+
+  for (const net of staleCandidates) {
+    try {
+      const inspected = await inspectNetwork(net.Id)
+      const containerCount = Object.keys(inspected.Containers ?? {}).length
+
+      if (containerCount > 0) {
+        logger.warn(`Stale network "${net.Name}" still has ${containerCount} container(s) connected; skipping removal. Stop and detach those containers (or add the network back to CUSTOMS_NETWORKS) to clean it up.`)
+        continue
+      }
+
+      await DOCKER.getNetwork(net.Id).remove()
+      logger.info(`Stale dragonify network "${net.Name}" removed (no longer in CUSTOMS_NETWORKS)`)
+    } catch (e: any) {
+      logger.error(`Failed to remove stale dragonify network "${net.Name}":`, e)
+    }
+  }
+}
+
 
 
 
@@ -526,6 +648,8 @@ async function main() {
   try {
     logger.info(`Dragonify initialising...`)
     await setUpDragonifyNetwork()
+    await setUpCustomNetworks()
+    await cleanupStaleDragonifyNetworks()
     await connectAllContainersToAppsNetwork(networksDragonifyed)
     // Flush any leftover empty networks
     await removeEmptyNetwork()
