@@ -17,6 +17,7 @@ const DRAGONIFY_NETWORK_NAME: string = process.env.CUSTOMS_NETWORK_NAME?.toLower
 const IX_DOCKER_LABEL = "com.docker.compose.project"
 const ENV_CONNECT_ALL: string | undefined = process.env.CONNECT_ALL
 const LOG_LEVEL: string | undefined = process.env.LOG_LEVEL?.toLowerCase() ?? "info"
+const ENV_CUSTOMS_NETWORKS: string | undefined = process.env.CUSTOMS_NETWORKS
 
 let CONNECT_ALL: boolean = true
 if (ENV_CONNECT_ALL !== undefined && ENV_CONNECT_ALL == "false") {
@@ -28,6 +29,18 @@ if (LOG_LEVEL !== undefined && LOG_LEVEL == "debug") {
   DEBUG = true
 }
 
+// Parse comma-separated list of custom networks to pre-create on startup.
+// These networks are useful for pre-defining networks you plan to use across
+// multiple applications via the `tj.horner.dragonify.networks` label.
+// Entries are trimmed, lowercased, and de-duplicated. Empty entries are ignored.
+const CUSTOMS_NETWORKS: string[] = ENV_CUSTOMS_NETWORKS
+  ? Array.from(new Set(
+      ENV_CUSTOMS_NETWORKS.split(',')
+        .map(n => n.trim().toLowerCase())
+        .filter(n => n.length > 0)
+    ))
+  : []
+
 logger.info(`Dragonify starting...`)
 logger.info(`LOG_LEVEL: ${LOG_LEVEL}`)
 logger.info(`CONNECT_ALL: ${CONNECT_ALL}`)
@@ -35,6 +48,9 @@ if (CONNECT_ALL) {
   logger.info(`DRAGONIFY_NETWORK_NAME: "${DRAGONIFY_NETWORK_NAME}"`)
 }
 logger.info(`DRAGONIFY_NETWORK_LABEL: "${DRAGONIFY_NETWORK_LABEL}"`)
+if (CUSTOMS_NETWORKS.length > 0) {
+  logger.info(`CUSTOMS_NETWORKS: [${CUSTOMS_NETWORKS.join(', ')}]`)
+}
 
 // We hold the Docker object instance globally to avoid having to pass it on every function call
 const DOCKER: Docker = new Docker()
@@ -514,6 +530,57 @@ async function setUpDragonifyNetwork() {
   }
 }
 
+// Pre-create any networks listed in the CUSTOMS_NETWORKS env var.
+// These networks are created as standard (non-internal) bridge networks so
+// containers connected to them retain external network access. They are tagged
+// with DRAGONIFY_NETWORK_LABEL so they can be identified as Dragonify-managed
+// and pruned automatically by `removeEmptyNetwork()` when they fall idle.
+// Containers are NOT auto-connected to these networks; connection is driven by
+// the per-container `tj.horner.dragonify.networks` label, same as any other
+// Dragonify-managed network.
+async function setUpCustomNetworks() {
+  if (CUSTOMS_NETWORKS.length === 0) {
+    return
+  }
+
+  logger.info(`Setting up custom networks defined by CUSTOMS_NETWORKS: [${CUSTOMS_NETWORKS.join(', ')}]`)
+
+  for (const networkName of CUSTOMS_NETWORKS) {
+    // Skip if this matches the default Dragonify network — already handled by setUpDragonifyNetwork()
+    if (networkName === DRAGONIFY_NETWORK_NAME) {
+      logger.debug(`Custom network "${networkName}" matches DRAGONIFY_NETWORK_NAME, skipping (already handled by setUpDragonifyNetwork)`)
+      continue
+    }
+
+    const existing = await filterNetworkByName(networkName)
+
+    // Check if the network already exists (created previously or by another tool)
+    if (existing.find(n => n.Name === networkName)) {
+      logger.debug(`Custom network "${networkName}" already exists`)
+      continue
+    }
+
+    // Create the custom network with the Dragonify label so it can be
+    // identified and cleaned up via pruneNetworks when no longer in use.
+    try {
+      await DOCKER.createNetwork({
+        Name: networkName,
+        Driver: "bridge",
+        Labels: {
+          [DRAGONIFY_NETWORK_LABEL]: "true"
+        },
+      })
+      logger.info(`Custom network "${networkName}" created`)
+    } catch (e: any) {
+      if (e.statusCode === 409) {
+        logger.debug(`Custom network "${networkName}" already exists (race condition)`)
+        continue
+      }
+      logger.error(`Failed to create custom network "${networkName}":`, e)
+    }
+  }
+}
+
 
 
 
@@ -526,6 +593,7 @@ async function main() {
   try {
     logger.info(`Dragonify initialising...`)
     await setUpDragonifyNetwork()
+    await setUpCustomNetworks()
     await connectAllContainersToAppsNetwork(networksDragonifyed)
     // Flush any leftover empty networks
     await removeEmptyNetwork()
